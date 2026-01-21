@@ -107,8 +107,20 @@ def process_with_agent(
             ):
                 # Update UI based on event type
                 if event.event_type == EventType.MESSAGE:
-                    response_text = event.data.get("content", "")
-                    response_placeholder.markdown(response_text)
+                    message_content = event.data.get("content", "")
+                    message_role = event.data.get("role", "assistant")
+
+                    if message_content:
+                        # System messages go to status, assistant messages to response
+                        if message_role == "system":
+                            status_placeholder.info(message_content)
+                        else:
+                            # Append assistant response (don't replace previous content)
+                            if response_text:
+                                response_text += "\n\n" + message_content
+                            else:
+                                response_text = message_content
+                            response_placeholder.markdown(response_text)
 
                 elif event.event_type == EventType.LLM_TOKEN:
                     response_text += event.data.get("token", "")

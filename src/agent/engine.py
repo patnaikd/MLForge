@@ -23,6 +23,7 @@ from src.agent.memory import ConversationMemory, MemoryManager
 from src.agent.planner import PlannerAgent
 from src.agent.streaming import EventAggregator
 from src.database.connection import Database
+from src.tools import TOOL_REGISTRY, create_tools, get_tools_requiring_approval
 
 
 class AgentState(str, Enum):
@@ -315,24 +316,70 @@ class AgentEngine:
 
 def create_agent_engine(
     llm: BaseChatModel,
-    tools: list[BaseTool],
-    db: Database,
+    tools: list[BaseTool] | None = None,
+    db: Database | None = None,
     project_path: Path | None = None,
+    project_id: str | None = None,
+    conversation_id: str | None = None,
 ) -> AgentEngine:
     """Factory function to create an agent engine.
 
+    If tools are not provided, creates all available tools with the project context.
+
     Args:
         llm: Language model
-        tools: Available tools
-        db: Database instance
+        tools: Available tools (if None, creates default tools)
+        db: Database instance (if None, uses default)
         project_path: Project directory path
+        project_id: Project ID for tool context
+        conversation_id: Conversation ID for tool context
 
     Returns:
         Configured AgentEngine
     """
+    # Get database if not provided
+    if db is None:
+        from src.database.connection import get_database
+        db = get_database()
+
+    # Create tools if not provided
+    if tools is None:
+        tools = create_tools(
+            project_path=project_path,
+            project_id=project_id,
+            conversation_id=conversation_id,
+        )
+
     return AgentEngine(
         llm=llm,
         tools=tools,
         db=db,
         project_path=project_path,
     )
+
+
+def get_approval_required_tools() -> list[str]:
+    """Get list of tool names that require user approval.
+
+    Returns:
+        List of tool names
+    """
+    return get_tools_requiring_approval()
+
+
+def should_require_approval(plan: Plan) -> bool:
+    """Check if a plan requires user approval based on tools used.
+
+    Args:
+        plan: Plan to check
+
+    Returns:
+        True if any step uses a tool requiring approval
+    """
+    approval_tools = set(get_tools_requiring_approval())
+
+    for step in plan.steps:
+        if step.tool_name and step.tool_name in approval_tools:
+            return True
+
+    return plan.requires_approval
