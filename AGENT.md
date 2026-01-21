@@ -95,8 +95,8 @@ An agentic AI application for machine learning and data science workflows. Users
 ### Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Streamlit UI Layer                          │
+┌────────────────────────────────────────────────────────────────────┐
+│                         Streamlit UI Layer                         │
 ├──────────────┬──────────────┬──────────────┬───────────────────────┤
 │  Chat Panel  │  Document    │    File      │   Project Manager     │
 │              │  Panel       │   Explorer   │                       │
@@ -104,15 +104,15 @@ An agentic AI application for machine learning and data science workflows. Users
        │              │              │                   │
        ▼              ▼              ▼                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      Application Core                                │
+│                      Application Core                               │
 ├─────────────────┬─────────────────┬─────────────────────────────────┤
 │  Agent Engine   │  Document       │  Project Service                │
 │  (LangChain)    │  Service        │                                 │
 └────────┬────────┴────────┬────────┴────────┬────────────────────────┘
          │                 │                 │
          ▼                 ▼                 ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                       Infrastructure Layer                           │
+┌────────────────────────────────────────────────────────────────────┐
+│                       Infrastructure Layer                         │
 ├──────────────┬──────────────┬──────────────┬───────────────────────┤
 │   SQLite     │  Job Runner  │  Code        │   LLM Providers       │
 │   Database   │  (subprocess)│  Executor    │   (Claude/OpenAI)     │
@@ -120,9 +120,9 @@ An agentic AI application for machine learning and data science workflows. Users
          │                           │
          ▼                           ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        File System                                   │
+│                        File System                                  │
 ├─────────────────────────────────────────────────────────────────────┤
-│  workspace/                                                          │
+│  workspace/                                                         │
 │  ├── .venv/                    (shared uv environment)              │
 │  ├── {project-prefix}-{timestamp}/                                  │
 │  │   ├── data/                 (uploaded datasets)                  │
@@ -314,9 +314,9 @@ User Input
 └────────┬────────┘
          │
          ▼
-┌─────────────────────────────────────────────┐
+┌──────────────────────────────────────────────┐
 │           Streaming Handler                  │
-│  ┌─────────────────────────────────────┐    │
+│  ┌──────────────────────────────────────┐    │
 │  │  Event Types:                        │    │
 │  │  - PlanCreatedEvent                  │    │
 │  │  - ApprovalRequestEvent              │    │
@@ -326,8 +326,8 @@ User Input
 │  │  - DocumentUpdateEvent               │    │
 │  │  - JobStatusEvent                    │    │
 │  │  - ErrorEvent                        │    │
-│  └─────────────────────────────────────┘    │
-└────────────────────┬────────────────────────┘
+│  └──────────────────────────────────────┘    │
+└────────────────────┬─────────────────────────┘
                      │
                      ▼
             ┌────────────────┐
