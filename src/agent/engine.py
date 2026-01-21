@@ -115,7 +115,7 @@ class AgentEngine:
             StreamEvents during processing
         """
         memory = self.get_memory(conversation_id)
-        streaming_handler = self.event_aggregator.create_handler()
+        planning_handler = self.event_aggregator.create_handler()
 
         try:
             # Add user message to memory
@@ -129,7 +129,7 @@ class AgentEngine:
             async for event_or_plan in self.planner.create_plan(
                 user_input=user_input,
                 memory=memory,
-                streaming_handler=streaming_handler,
+                streaming_handler=planning_handler,
             ):
                 if isinstance(event_or_plan, Plan):
                     plan = event_or_plan
@@ -189,10 +189,11 @@ class AgentEngine:
 
                 step_approval_callback = _step_approval
 
+            execution_handler = self.event_aggregator.create_handler()
             async for event in self.executor.execute_plan(
                 plan=plan,
                 memory=memory,
-                streaming_handler=streaming_handler,
+                streaming_handler=execution_handler,
                 approval_callback=step_approval_callback,
             ):
                 yield event

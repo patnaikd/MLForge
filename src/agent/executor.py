@@ -1,11 +1,13 @@
 """Executor agent for executing plan steps."""
 
+import asyncio
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
+from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
 from src.agent.events import (
@@ -18,8 +20,6 @@ from src.agent.events import (
     message_event,
     step_completed_event,
     step_started_event,
-    tool_completed_event,
-    tool_started_event,
 )
 from src.agent.memory import ConversationMemory
 from src.agent.streaming import StreamingHandler
@@ -65,6 +65,7 @@ class ExecutorAgent:
         self.tools = tools
         self.tools_by_name = {tool.name: tool for tool in tools}
         self.project_path = project_path
+        self._agent_cache: dict[tuple[str, ...], Any] = {}
 
     def _build_execution_prompt(
         self,
@@ -114,18 +115,10 @@ Tool to use: {step.tool_name or "reasoning only"}
         yield step_started_event(step.step_number, step.description)
 
         try:
-            if step.tool_name and step.tool_name in self.tools_by_name:
-                # Execute with tool
-                async for event in self._execute_with_tool(
-                    step, streaming_handler, context
-                ):
-                    yield event
-            else:
-                # Execute with LLM reasoning only
-                async for event in self._execute_with_reasoning(
-                    step, memory, streaming_handler
-                ):
-                    yield event
+            async for event in self._execute_with_agent(
+                step, memory, streaming_handler, context
+            ):
+                yield event
 
             # Mark step as completed
             step.status = "completed"
@@ -136,141 +129,101 @@ Tool to use: {step.tool_name or "reasoning only"}
             yield error_event(f"Step {step.step_number} failed: {str(e)}")
             yield step_completed_event(step.step_number, f"Failed: {str(e)}")
 
-    async def _execute_with_tool(
+    def _select_tools(self, step: PlanStep) -> list[BaseTool]:
+        """Select tools for the given step."""
+        if step.tool_name and step.tool_name in self.tools_by_name:
+            return [self.tools_by_name[step.tool_name]]
+        return self.tools
+
+    def _get_agent(self, tools: Iterable[BaseTool]) -> Any:
+        """Get or create a cached agent for a tool subset."""
+        key = tuple(tool.name for tool in tools)
+        if key not in self._agent_cache:
+            self._agent_cache[key] = create_agent(
+                self.llm,
+                tools=list(tools),
+                system_prompt=EXECUTOR_SYSTEM_PROMPT,
+            )
+        return self._agent_cache[key]
+
+    async def _drain_streaming_events(
+        self,
+        streaming_handler: StreamingHandler,
+        result_task: "asyncio.Task[Any]",
+        poll_interval: float = 0.1,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Yield streaming events while the agent is running."""
+        while not result_task.done():
+            event = await streaming_handler.get_event(timeout=poll_interval)
+            if event:
+                yield event
+
+        while True:
+            event = await streaming_handler.get_event(timeout=poll_interval)
+            if not event:
+                break
+            yield event
+
+    def _build_messages(
         self,
         step: PlanStep,
-        streaming_handler: StreamingHandler | None = None,
-        context: dict[str, Any] | None = None,
-    ) -> AsyncGenerator[StreamEvent, None]:
-        """Execute a step using a tool.
+        memory: ConversationMemory | None,
+        context: dict[str, Any] | None,
+    ) -> list[BaseMessage]:
+        """Build the message list for the agent call."""
+        messages: list[BaseMessage] = []
+        if memory:
+            messages.extend(memory.get_messages_for_llm())
+        prompt = self._build_execution_prompt(step, context=str(context) if context else None)
+        messages.append(HumanMessage(content=prompt))
+        return messages
 
-        Args:
-            step: Step to execute
-            streaming_handler: Handler for streaming events
-            context: Context from previous steps
+    def _extract_response_text(self, result: Any) -> str:
+        """Extract the final response text from an agent result."""
+        messages = None
+        if isinstance(result, dict):
+            messages = result.get("messages")
+        elif hasattr(result, "messages"):
+            messages = getattr(result, "messages")
+        elif isinstance(result, list):
+            messages = result
 
-        Yields:
-            StreamEvents during execution
-        """
-        tool = self.tools_by_name[step.tool_name]
+        if messages:
+            last = messages[-1]
+            if hasattr(last, "content"):
+                return str(last.content)
+            return str(last)
 
-        # Build tool input from step description and context
-        tool_input = await self._build_tool_input(step, context)
+        return str(result)
 
-        yield tool_started_event(tool.name, tool_input)
-
-        try:
-            # Execute the tool
-            if hasattr(tool, "ainvoke"):
-                result = await tool.ainvoke(tool_input)
-            else:
-                result = tool.invoke(tool_input)
-
-            yield tool_completed_event(tool.name, str(result))
-            yield message_event(f"Tool '{tool.name}' completed: {str(result)[:500]}")
-
-        except Exception as e:
-            yield error_event(f"Tool execution failed: {str(e)}")
-            raise
-
-    async def _execute_with_reasoning(
+    async def _execute_with_agent(
         self,
         step: PlanStep,
         memory: ConversationMemory | None = None,
         streaming_handler: StreamingHandler | None = None,
-    ) -> AsyncGenerator[StreamEvent, None]:
-        """Execute a step using LLM reasoning only.
-
-        Args:
-            step: Step to execute
-            memory: Conversation memory
-            streaming_handler: Handler for streaming events
-
-        Yields:
-            StreamEvents during execution
-        """
-        messages = [
-            SystemMessage(content=EXECUTOR_SYSTEM_PROMPT),
-            HumanMessage(content=self._build_execution_prompt(step)),
-        ]
-
-        # Add memory context
-        if memory:
-            recent = memory.get_recent_messages(3)
-            for msg in recent:
-                if hasattr(msg, "type") and msg.type == "human":
-                    messages.append(HumanMessage(content=msg.content))
-                else:
-                    messages.append(AIMessage(content=msg.content))
-
-        # Get LLM response
-        if streaming_handler:
-            response_text = ""
-            async for chunk in self.llm.astream(
-                messages,
-                config={"callbacks": [streaming_handler]},
-            ):
-                if hasattr(chunk, "content"):
-                    response_text += chunk.content
-            response = response_text
-        else:
-            result = await self.llm.ainvoke(messages)
-            response = result.content
-
-        yield message_event(response)
-
-    async def _build_tool_input(
-        self,
-        step: PlanStep,
         context: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Build input for a tool based on step description.
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Execute a step using LangChain's create_agent loop."""
+        tools = self._select_tools(step)
+        agent = self._get_agent(tools)
+        messages = self._build_messages(step, memory, context)
+        payload = {"messages": messages}
 
-        Args:
-            step: Plan step
-            context: Context from previous steps
+        if streaming_handler:
+            result_task = asyncio.create_task(
+                agent.ainvoke(payload, config={"callbacks": [streaming_handler]})
+            )
+            async for event in self._drain_streaming_events(
+                streaming_handler, result_task
+            ):
+                yield event
+            result = await result_task
+        else:
+            result = await agent.ainvoke(payload)
 
-        Returns:
-            Tool input dictionary
-        """
-        # Use LLM to generate appropriate tool input
-        tool = self.tools_by_name[step.tool_name]
-
-        prompt = f"""Given the following step description, generate the appropriate input for the tool.
-
-Step: {step.description}
-Tool: {tool.name}
-Tool Description: {tool.description}
-
-Context: {context or "No previous context"}
-
-Generate a JSON object with the required tool parameters.
-Only return the JSON object, nothing else."""
-
-        messages = [
-            SystemMessage(content="You are a helpful assistant that generates tool inputs."),
-            HumanMessage(content=prompt),
-        ]
-
-        result = await self.llm.ainvoke(messages)
-
-        # Parse the response
-        import json
-        import re
-
-        response = result.content
-
-        try:
-            # Try to parse as JSON directly
-            return json.loads(response)
-        except json.JSONDecodeError:
-            # Try to extract JSON from response
-            json_match = re.search(r"\{[\s\S]*\}", response)
-            if json_match:
-                return json.loads(json_match.group(0))
-
-        # Fallback to simple input
-        return {"input": step.description}
+        response = self._extract_response_text(result)
+        if response:
+            yield message_event(response)
 
     async def execute_plan(
         self,
