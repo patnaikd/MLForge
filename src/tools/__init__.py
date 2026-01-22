@@ -11,6 +11,7 @@ Available Tools:
 - WebFetchTool: Fetch and extract content from web pages
 - TodoListTool: Track agent tasks and progress
 - TaskPlannerTool: Create structured task plans
+- DocumentTool: Add content to the running document panel
 """
 
 from pathlib import Path
@@ -20,6 +21,7 @@ from langchain_core.tools import BaseTool
 
 from src.tools.base import BaseAgentTool, ToolResult, format_file_size
 from src.tools.bash_executor import BashExecutorTool, BashExecutorStreamingTool
+from src.tools.document_tool import DocumentTool
 from src.tools.file_operations import FileOperationsTool
 from src.tools.python_executor import PythonExecutorTool
 from src.tools.todo_list import TaskPlannerTool, TodoListTool
@@ -42,6 +44,8 @@ __all__ = [
     # Task tracking
     "TodoListTool",
     "TaskPlannerTool",
+    # Document
+    "DocumentTool",
     # Factory function
     "create_tools",
     "get_tool_by_name",
@@ -92,6 +96,12 @@ TOOL_REGISTRY: dict[str, dict[str, Any]] = {
         "requires_approval": False,
         "description": "Create structured task plans",
         "category": "planning",
+    },
+    "document": {
+        "class": DocumentTool,
+        "requires_approval": False,
+        "description": "Add content to the running document panel",
+        "category": "document",
     },
 }
 

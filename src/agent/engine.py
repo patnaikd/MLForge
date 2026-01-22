@@ -15,6 +15,7 @@ from src.agent.events import (
     approval_denied_event,
     approval_granted_event,
     approval_requested_event,
+    document_update_event,
     error_event,
     message_event,
 )
@@ -23,6 +24,7 @@ from src.agent.memory import ConversationMemory, MemoryManager
 from src.agent.planner import PlannerAgent
 from src.agent.streaming import EventAggregator
 from src.database.connection import Database
+from src.services.document_service import DocumentService
 from src.tools import TOOL_REGISTRY, create_tools, get_tools_requiring_approval
 
 
@@ -50,6 +52,7 @@ class AgentEngine:
         tools: list[BaseTool],
         db: Database,
         project_path: Path | None = None,
+        project_id: str | None = None,
     ):
         """Initialize the agent engine.
 
@@ -58,11 +61,13 @@ class AgentEngine:
             tools: List of available tools
             db: Database instance for persistence
             project_path: Path to the project directory
+            project_id: Project ID for document service
         """
         self.llm = llm
         self.tools = tools
         self.db = db
         self.project_path = project_path
+        self.project_id = project_id
 
         # Initialize components
         self.planner = PlannerAgent(
@@ -76,6 +81,9 @@ class AgentEngine:
         )
         self.memory_manager = MemoryManager(db)
         self.event_aggregator = EventAggregator()
+
+        # Document service (lazy initialized)
+        self._document_service: DocumentService | None = None
 
         # State
         self.state = AgentState.IDLE
@@ -92,6 +100,20 @@ class AgentEngine:
             ConversationMemory instance
         """
         return self.memory_manager.get_memory(conversation_id)
+
+    def get_document_service(self) -> DocumentService | None:
+        """Get the document service for this agent.
+
+        Returns:
+            DocumentService instance or None if no project_id
+        """
+        if self._document_service is None and self.project_id:
+            self._document_service = DocumentService(
+                db=self.db,
+                project_id=self.project_id,
+                project_path=self.project_path,
+            )
+        return self._document_service
 
     async def run(
         self,
@@ -355,6 +377,7 @@ def create_agent_engine(
         tools=tools,
         db=db,
         project_path=project_path,
+        project_id=project_id,
     )
 
 
